@@ -6,7 +6,7 @@ This library is used to manipulate data recorded using the Farsoon data setup
 """
 __author__ = '{ENS Brett Brady}'
 __credits__ = ['{Jared Research Group}']
-__version__ = '{1}.{0}.{0}'
+__version__ = '{1}.{1}.{0}'
 __maintainer__ = '{BB}'
 __email__ = '{brettbrady15@outlook.com}'
 __status__ = '{On Going}'
@@ -27,7 +27,8 @@ import pandas as pd
 from tkinter import filedialog
 import matplotlib.pyplot as plt
 import re
-
+import tkinter as tk
+print(f"PostProcessingLibrary version {__version__} -- Jared Research Group")
 class HDF5_Handler:
     def create_HDF5(path, FO_num, NIR_Comp = 7, FLIR_Comp = 5):
         """
@@ -182,13 +183,9 @@ class Create_Videos:
                         for image in images:
                             img =  f["FLIR"][image][:]
                             img = FrameHandler_BB.convert_to_C(img, calibration, env)
-                            img = Perspective_Transform.correct_image(img, H, base_img)
-                            # ##################################
-                            # img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-                            # result = cv2.warpPerspective(img, homography, (img.shape[1]+100, img.shape[0]+100))
-                            # img = cv2.flip(cv2.rotate(result, cv2.ROTATE_180), 1)
-                            # #############################
+                            img = Perspective_Transform.correct_image(img, H, base_img, flag = 'FLIR')
                             degC = img
+
                             # Write the image to video
                             img[0,0] = 27
                             img[0,1] = 60
@@ -209,7 +206,7 @@ class Create_Videos:
                     img_path = os.path.join(input_path, image)
                     img = np.load(img_path)
                     img = FrameHandler_BB.convert_to_C(img, calibration, env)
-                    img = Perspective_Transform.correct_image(img, H, base_img)
+                    img = Perspective_Transform.correct_image(img, H, base_img, flag = 'FLIR')
                     degC = img.copy()
                     # Write the image to video
                     img[0,0] = 27
@@ -270,7 +267,7 @@ class Create_Videos:
             images = [img for img in os.listdir(file_path) if img.endswith(".tiff")]
             path = os.path.join(file_path, images[0])
             frame = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-            frame = Perspective_Transform.correct_image(frame, H, base_img)
+            frame = Perspective_Transform.correct_image(frame, H, base_img,flag = 'NIR' )
             height, width = frame.shape
 
             video = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'MJPG'), fps, (width, height))
@@ -279,7 +276,7 @@ class Create_Videos:
                 for image in images:
                     path = os.path.join(file_path, image)
                     frame = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                    frame = Perspective_Transform.correct_image(frame, H, base_img)
+                    frame = Perspective_Transform.correct_image(frame, H, base_img, flag = 'NIR')
                     frame[0,0] = 0
                     frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                     frame = cv2.applyColorMap(frame, cv2.COLORMAP_JET)
@@ -291,7 +288,8 @@ class Create_Videos:
 
 class ImageProcessor:
 
-    def __init__(self, root, image_folder):
+    def __init__(self, image_folder):
+        root = tk.Tk()
         self.root = root
         self.root.title("Image Processor")
 
@@ -321,7 +319,8 @@ class ImageProcessor:
             # Open CSV file for writing
             with open(self.csv_file_path, 'w', newline='') as csvfile:
                 csv_writer = csv.writer(csvfile)
-                csv_writer.writerow(["Image Name", "Average Intensity", "Max Intensity", "Min Intensity"])
+                csv_writer.writerow(["Image Name","Max Intensity"])
+                rows_to_write = []
                 with alive_bar(len(image_files), bar="filling") as bar:
                     for image_file in image_files:
                         
@@ -335,20 +334,16 @@ class ImageProcessor:
                             self.height, self.width = self.image.shape
 
                             # Calculate intensity values
-                            avg_intensity = self.calculate_average_intensity(self.image)
-                            max_intensity = self.calculate_max_intensity(self.image)
-                            min_intensity = self.calculate_min_intensity(self.image)
-                            # print(avg_intensity, max_intensity, min_intensity)
+                            image8 = self.image.astype('uint8')
+                            max_intensity = self.calculate_max_intensity(image8)
 
-                            # Write to CSV file
-                            csv_writer.writerow([image_file, avg_intensity, max_intensity, min_intensity])
-
-                            # self.root.update()
-
+                            rows_to_write.append([dataset_name, max_intensity])
                             bar()
 
                         except Exception as e:
                             print(f"Error processing image {image_file}: {e}")
+
+                    csv_writer.writerows(rows_to_write)
 
         elif os.path.isfile(image_source) and image_source.lower().endswith('.hdf5'):
             with h5py.File(image_source, 'r') as hdf_file:
@@ -356,53 +351,34 @@ class ImageProcessor:
                     datasets = sorted(hdf_file[group_name].keys(), key=natural_sort_key)           
                     with open(self.csv_file_path, 'w', newline='') as csvfile:
                         csv_writer = csv.writer(csvfile)
-                        csv_writer.writerow(["Image Name", "Average Intensity", "Max Intensity", "Min Intensity"])
+                        csv_writer.writerow(["Image Name", "Max Intensity"])
+                        rows_to_write = []
                         with alive_bar(len(datasets), bar="filling") as bar:
                             for dataset_name in datasets:
                                 # Extract numpy array from the dataset
                                 self.image = hdf_file[group_name][dataset_name][:]
                                 self.height, self.width = self.image.shape
-
+                                image8 = self.image.astype('uint8')
                                 # Calculate intensity values
-                                avg_intensity = self.calculate_average_intensity(self.image)
-                                max_intensity = self.calculate_max_intensity(self.image)
-                                min_intensity = self.calculate_min_intensity(self.image)
+                                max_intensity = self.calculate_max_intensity(image8)
 
                                 # Write to CSV file
-                                csv_writer.writerow([dataset_name, avg_intensity, max_intensity, min_intensity])
+                                rows_to_write.append([dataset_name, max_intensity])
                                 bar()
+                csv_writer.writerows(rows_to_write)
         print("Processing complete.")
 
     def calculate_average_intensity(self, image):
         # Convert image to grayscale
-        image = (image).astype('uint8')
-        image =  cv2.GaussianBlur(image, (7, 7), 0)
-
-        gray_image = image
-
-        # Calculate average intensity
-        avg_intensity = cv2.mean(gray_image)[0]
-
-        return avg_intensity
+        image =  cv2.GaussianBlur(image, (7, 7), 0) 
+        return cv2.mean(image)[0]
 
     def calculate_max_intensity(self, image):
-        # Convert image to grayscale
-        # Calculate max intensity
-        image = (image).astype('uint8')
-        image =  cv2.GaussianBlur(image, (5, 5), 0)
-        max_intensity = np.max(image)
-        return max_intensity
+        return np.max(cv2.GaussianBlur(image, (5, 5), 0))
 
     def calculate_min_intensity(self, image):
-        # Convert image to grayscale
-        image = (image).astype('uint8')
         image =  cv2.GaussianBlur(image, (5, 5), 0)
-
-        gray_image = image
-        # Calculate min intensity
-        min_intensity = gray_image.min()
-
-        return min_intensity
+        return image.min()
 
 class Layer_Creation:
     def extract_consecutive_groups(intensity_threshold, image_folder, calibration_image):
@@ -475,8 +451,7 @@ class Layer_Creation:
             os.makedirs(layer_folder, exist_ok=True)
             video_name = os.path.join(layer_folder,'layer.avi') 
             fps = 5
-            temp_img = cv2.imread(os.path.join(image_folder, f"{image_name[0]}"),cv2.IMREAD_UNCHANGED)
-            temp_img = Perspective_Transform.correct_image(temp_img, H, base_img, flag = 'NIR')
+            temp_img = Perspective_Transform.correct_image(cv2.imread(os.path.join(image_folder, f"{image_name[0]}"),cv2.IMREAD_UNCHANGED), H, base_img, flag = 'NIR')
 
             height, width = temp_img.shape
             video = cv2.VideoWriter(video_name, cv2.VideoWriter_fourcc(*'MJPG'), fps, (2*width, height))
