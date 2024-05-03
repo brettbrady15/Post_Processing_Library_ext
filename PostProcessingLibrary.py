@@ -27,8 +27,9 @@ import pandas as pd
 from tkinter import filedialog
 import matplotlib.pyplot as plt
 import re
-import tkinter as tk
+
 print(f"PostProcessingLibrary version {__version__} -- Jared Research Group")
+
 class HDF5_Handler:
     def create_HDF5(path, FO_num, NIR_Comp = 7, FLIR_Comp = 5):
         """
@@ -109,7 +110,6 @@ class Create_Videos:
             output_video_path (str): Path to save the output video.
             json_file_path (str): Path to the JSON file containing camera calibration data for the recorded images.
             calibration_imgae (mat): image of calibration plate
-            calibration_json (str): Path to the JSON file containting camera calibration data for the calibration images.
             fps (int, optional): Frames per second for the output video. Defaults to 30.
 
         Returns:
@@ -131,23 +131,6 @@ class Create_Videos:
             frame = np.load(os.path.join(input_path, images[0]))
         
         frame = FrameHandler_BB.convert_to_C(frame, calibration, env)
-        # ####################TEMP
-        # frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        # pt1 = np.array([200, 168])
-        # pt2 = np.array([325, 188])
-        # pt3 = np.array([211, 32])
-        # pt4 = np.array([332, 59])
-        # # Calculate distances
-        # y = np.linalg.norm(pt2 - pt1)
-        # x = np.linalg.norm(pt4 - pt1)
-        # z = 200
-        # pts_src = np.array([[200, 168], [325, 188], [211, 32], [332, 59]], dtype=np.float32)
-        # pts_dst = np.array([[z, z], [z+x, z], [z, z+y], [z+x,z+y]], dtype=np.float32)
-        # homography, _ = cv2.findHomography(pts_src, pts_dst)
-        # transformed_pts = cv2.perspectiveTransform(pts_src.reshape(-1, 1, 2), homography)
-        # frame = cv2.warpPerspective(frame, homography, (frame.shape[1]+100, frame.shape[0]+100))
-        # frame = cv2.flip(cv2.rotate(frame, cv2.ROTATE_180), 1)
-        # ############################
         frame = Perspective_Transform.correct_image(frame, H, base_img)
 
         degC = frame.copy()
@@ -289,10 +272,6 @@ class Create_Videos:
 class ImageProcessor:
 
     def __init__(self, image_folder):
-        root = tk.Tk()
-        self.root = root
-        self.root.title("Image Processor")
-
         # CSV file for storing intensity values
         if os.path.isfile(image_folder) and image_folder.lower().endswith('.hdf5'):
             self.csv_file_path = os.path.join(os.path.dirname(image_folder), "intensity_values.csv")
@@ -365,7 +344,7 @@ class ImageProcessor:
                                 # Write to CSV file
                                 rows_to_write.append([dataset_name, max_intensity])
                                 bar()
-                csv_writer.writerows(rows_to_write)
+                        csv_writer.writerows(rows_to_write)
         print("Processing complete.")
 
     def calculate_average_intensity(self, image):
@@ -416,13 +395,13 @@ class Layer_Creation:
         above_threshold_df = df[df['Max Intensity'] > intensity_threshold]
 
         extracted_frames = []
+        ref = []
+        image_name = []
 
         for index, row in above_threshold_df.iterrows():
             frame_value = row['Frame']
             extracted_frames.append(frame_value)
 
-        ref = []
-        image_name = []
         ref.append(0)
         for i in range(1, len(extracted_frames)):
             if extracted_frames[i] != extracted_frames[i - 1] + 1:
@@ -433,19 +412,18 @@ class Layer_Creation:
 
         for i in range(0, len(extracted_frames)):
                 corresponding_row = above_threshold_df[above_threshold_df['Frame'] == extracted_frames[i]].iloc[0]
-                # print(i, extracted_frames[i])
                 image_name.append(corresponding_row['Image Name'])
         
-
-        layer = 0
-
         reflist = np.array(ref).reshape(-1,2).tolist()
 
-        # print(reflist)
         layer_folder = os.path.join(image_folder, "Layer")
         video_name = os.path.join(layer_folder,'layer.avi') 
         fps = 5
 
+        print(extracted_frames)
+        print(ref)
+        
+        layer = 0
         if os.path.isdir(image_folder):
             layer_folder = os.path.join(image_folder,"Layer")
             os.makedirs(layer_folder, exist_ok=True)
@@ -613,14 +591,12 @@ class Layer_Creation:
             layer_folder = os.path.join(image_folder,"Layer")
             os.makedirs(layer_folder, exist_ok=True)
             temp_img = cv2.imread(os.path.join(image_folder, f"{image_name[0]}"),cv2.IMREAD_UNCHANGED)
-            height, width = temp_img.shape
             crop_x1, crop_y1, crop_x2, crop_y2 = 120, 247, 450, 1600
             plt.ion()
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
 
-            fig_cum = plt.figure()
-            ax_cum = fig.add_subplot(111, projection= '3d')
+
             try:
                 for start, end in reflist:
                     layer += 1
@@ -1210,22 +1186,23 @@ def calibrate_NIR(image, base_img):
             X: X scale.
             Y: Y scale.
         """
-    ########################################Blob Detector##############################################
-    blobParams = cv2.SimpleBlobDetector_Params()
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    blobParams.minThreshold = 1
-    blobParams.maxThreshold = 399
-    blobParams.filterByArea = True
-    blobParams.minArea = 10     # minArea may be adjusted to suit for your experiment
-    blobParams.maxArea = 15000   # maxArea may be adjusted to suit for your experiment
-    blobParams.filterByCircularity = True
-    blobParams.minCircularity = 0.1
-    blobParams.filterByConvexity = True
-    blobParams.minConvexity = 0.87
-    blobParams.filterByInertia = True
-    blobParams.minInertiaRatio = 0.01
-    Detector = cv2.SimpleBlobDetector_create(blobParams)
-    ###################################################################################################
+    def load_blob():
+        blobParams = cv2.SimpleBlobDetector_Params()
+        blobParams.minThreshold = 1
+        blobParams.maxThreshold = 399
+        blobParams.filterByArea = True
+        blobParams.minArea = 10     # minArea may be adjusted to suit for your experiment
+        blobParams.maxArea = 15000   # maxArea may be adjusted to suit for your experiment
+        blobParams.filterByCircularity = True
+        blobParams.minCircularity = 0.1
+        blobParams.filterByConvexity = True
+        blobParams.minConvexity = 0.87
+        blobParams.filterByInertia = True
+        blobParams.minInertiaRatio = 0.01
+        Detector = cv2.SimpleBlobDetector_create(blobParams)
+        return Detector
+    
+    Detector = load_blob()
     img = image.copy()
     _ , pts_src = cv2.findCirclesGrid(image, (11,9), None, flags = cv2.CALIB_CB_SYMMETRIC_GRID)   # Find the circle grid
     _ , pts_dst = cv2.findCirclesGrid(base_img, (11,9), None, flags = cv2.CALIB_CB_SYMMETRIC_GRID)   # Find the circle grid
@@ -1271,23 +1248,23 @@ def calibrate_optical(image, base_img):
             X: X scale.
             Y: Y scale.
     """
-    ########################################Blob Detector##############################################
-    # Setup SimpleBlobDetector parameters.
-    blobParams = cv2.SimpleBlobDetector_Params()
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    blobParams.minThreshold = 1
-    blobParams.maxThreshold = 399
-    blobParams.filterByArea = True
-    blobParams.minArea = 150     # minArea may be adjusted to suit for your experiment
-    blobParams.maxArea = 15000   # maxArea may be adjusted to suit for your experiment
-    blobParams.filterByCircularity = True
-    blobParams.minCircularity = 0.1
-    blobParams.filterByConvexity = True
-    blobParams.minConvexity = 0.87
-    blobParams.filterByInertia = True
-    blobParams.minInertiaRatio = 0.01
-    Detector = cv2.SimpleBlobDetector_create(blobParams)
-    ###################################################################################################
+    def load_blob():
+        blobParams = cv2.SimpleBlobDetector_Params()
+        blobParams.minThreshold = 1
+        blobParams.maxThreshold = 399
+        blobParams.filterByArea = True
+        blobParams.minArea = 150     # minArea may be adjusted to suit for your experiment
+        blobParams.maxArea = 15000   # maxArea may be adjusted to suit for your experiment
+        blobParams.filterByCircularity = True
+        blobParams.minCircularity = 0.1
+        blobParams.filterByConvexity = True
+        blobParams.minConvexity = 0.87
+        blobParams.filterByInertia = True
+        blobParams.minInertiaRatio = 0.01
+        Detector = cv2.SimpleBlobDetector_create(blobParams)
+        return Detector
+    
+    Detector = load_blob()
 
     img = image.copy()
     _ , pts_src = cv2.findCirclesGrid(image, (11,9), None, flags = cv2.CALIB_CB_SYMMETRIC_GRID, blobDetector=Detector)   # Find the circle grid
@@ -1374,21 +1351,22 @@ def FLIR_Generate_BaseImage(calibration_image):
         Returns:
             The base image for FLIR calibration.
     """
-    ########################################Blob Detector##############################################
-    blobParams = cv2.SimpleBlobDetector_Params()
-    blobParams.minThreshold = 1
-    blobParams.maxThreshold = 399
-    blobParams.filterByArea = True
-    blobParams.minArea = 120     # minArea may be adjusted to suit for your experiment
-    blobParams.maxArea = 500   # maxArea may be adjusted to suit for your experiment
-    blobParams.filterByCircularity = True
-    blobParams.minCircularity = 0.1
-    blobParams.filterByConvexity = True
-    blobParams.minConvexity = 0.87
-    blobParams.filterByInertia = True
-    blobParams.minInertiaRatio = 0.01
-    blobDetector = cv2.SimpleBlobDetector_create(blobParams)
-    ########################################Blob Detector##############################################
+    def load_blob():
+        blobParams = cv2.SimpleBlobDetector_Params()
+        blobParams.minThreshold = 1
+        blobParams.maxThreshold = 399
+        blobParams.filterByArea = True
+        blobParams.minArea = 120     # minArea may be adjusted to suit for your experiment
+        blobParams.maxArea = 500   # maxArea may be adjusted to suit for your experiment
+        blobParams.filterByCircularity = True
+        blobParams.minCircularity = 0.1
+        blobParams.filterByConvexity = True
+        blobParams.minConvexity = 0.87
+        blobParams.filterByInertia = True
+        blobParams.minInertiaRatio = 0.01
+        return cv2.SimpleBlobDetector_create(blobParams)
+    
+    blobDetector = load_blob()
     img = cv2.normalize(calibration_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
     img = cv2.medianBlur(img,7)
     keypoints = blobDetector.detect(img) # Detect blobs.
@@ -1436,28 +1414,24 @@ def NIR_Generate_BaseImage(img):
         Returns:
             The base image for calibration.
     """
-    ########################################Blob Detector##############################################
-    # Setup SimpleBlobDetector parameters.
-    blobParams = cv2.SimpleBlobDetector_Params()
-    # Change thresholds
-    blobParams.minThreshold = 1
-    blobParams.maxThreshold = 399
-    # Filter by Area.
-    blobParams.filterByArea = True
-    blobParams.minArea = 700     # minArea may be adjusted to suit for your experiment
-    blobParams.maxArea = 3000   # maxArea may be adjusted to suit for your experiment
-    # Filter by Circularity
-    blobParams.filterByCircularity = True
-    blobParams.minCircularity = 0.5
-    # Filter by Convexity
-    blobParams.filterByConvexity = True
-    blobParams.minConvexity = 0.87
-    # Filter by Inertia
-    blobParams.filterByInertia = True
-    blobParams.minInertiaRatio = 0.01
-    # Create a detector with the parameters
-    blobDetector = cv2.SimpleBlobDetector_create(blobParams)
-    ####################################################################################################
+    def load_blob():
+        blobParams = cv2.SimpleBlobDetector_Params()
+        blobParams.minThreshold = 1
+        blobParams.maxThreshold = 399
+        blobParams.filterByArea = True
+        blobParams.minArea = 700     # minArea may be adjusted to suit for your experiment
+        blobParams.maxArea = 3000   # maxArea may be adjusted to suit for your experiment
+        blobParams.filterByCircularity = True
+        blobParams.minCircularity = 0.5
+        blobParams.filterByConvexity = True
+        blobParams.minConvexity = 0.87
+        blobParams.filterByInertia = True
+        blobParams.minInertiaRatio = 0.01
+        blobDetector = cv2.SimpleBlobDetector_create(blobParams)
+        return blobDetector
+    
+    blobDetector = load_blob()
+
     img1 = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
     img1 = mask_image(img1, [(261, 186),(1680, 150),(1711, 1886),(231, 1689)])
     img1 = cv2.rotate(img1, cv2.ROTATE_180)
