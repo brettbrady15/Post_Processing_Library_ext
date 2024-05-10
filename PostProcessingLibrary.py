@@ -6,14 +6,10 @@ This library is used to manipulate data recorded using the Farsoon data setup
 """
 __author__ = '{ENS Brett Brady}'
 __credits__ = ['{Jared Research Group}']
-__version__ = '{1}.{1}.{0}'
+__version__ = '{1}.{1}.{1}'
 __maintainer__ = '{BB}'
 __email__ = '{brettbrady15@outlook.com}'
 __status__ = '{On Going}'
-
-# TO-DO
-# Ensure HDF5 and file path works for all functions
-# write example scripts
 
 import h5py
 import os
@@ -275,8 +271,10 @@ class ImageProcessor:
         # CSV file for storing intensity values
         if os.path.isfile(image_folder) and image_folder.lower().endswith('.hdf5'):
             self.csv_file_path = os.path.join(os.path.dirname(image_folder), "intensity_values.csv")
+            self.csv_file_path_flir = os.path.join(image_folder, "FLIR_intensity_values.csv")
         else:
             self.csv_file_path = os.path.join(image_folder, "intensity_values.csv")
+            self.csv_file_path_flir = os.path.join(image_folder, "FLIR_intensity_values.csv")
 
         # Process images in the folder
         self.process_images(image_folder)
@@ -330,7 +328,7 @@ class ImageProcessor:
                     datasets = sorted(hdf_file[group_name].keys(), key=natural_sort_key)           
                     with open(self.csv_file_path, 'w', newline='') as csvfile:
                         csv_writer = csv.writer(csvfile)
-                        csv_writer.writerow(["Image Name", "Max Intensity"])
+                        csv_writer.writerow(["Image Name", "Max Intensity", "Time Stamp"])
                         rows_to_write = []
                         with alive_bar(len(datasets), bar="filling") as bar:
                             for dataset_name in datasets:
@@ -341,8 +339,13 @@ class ImageProcessor:
                                 # Calculate intensity values
                                 max_intensity = self.calculate_max_intensity(image8)
 
+                                try:
+                                    Time = hdf_file[group_name][dataset_name].attrs['Time']
+                                except: 
+                                    Time = "N/A"
+
                                 # Write to CSV file
-                                rows_to_write.append([dataset_name, max_intensity])
+                                rows_to_write.append([dataset_name, max_intensity, Time])
                                 bar()
                         csv_writer.writerows(rows_to_write)
         print("Processing complete.")
@@ -358,8 +361,181 @@ class ImageProcessor:
     def calculate_min_intensity(self, image):
         image =  cv2.GaussianBlur(image, (5, 5), 0)
         return image.min()
+    
+    def extract_FLIR_details(self, FLIR_HDF):
+        """
+        Process images from a given source folder for NIR Layer Creation.
+
+        Parameters:
+            image_source (str): Path to the folder/HDF5 archive containing FLIR images.
+
+        Returns:
+            None
+        """
+        with h5py.File(FLIR_HDF, 'r') as hdf_file:
+                for group_name in hdf_file.keys():                
+                    datasets = sorted(hdf_file[group_name].keys(), key=natural_sort_key)           
+                    with open(self.csv_file_path_flir, 'w', newline='') as csvfile:
+                        csv_writer = csv.writer(csvfile)
+                        csv_writer.writerow(["Image Name", "Time Stamp"])
+                        rows_to_write = []
+                        with alive_bar(len(datasets), bar="filling") as bar:
+                            for dataset_name in datasets:
+                                try:
+                                    Time = hdf_file[group_name][dataset_name].attrs['Time']
+                                except: 
+                                    Time = "N/A"
+
+                                rows_to_write.append([dataset_name, Time])
+                                bar()
+                        csv_writer.writerows(rows_to_write)
+                        
+        print("Processing complete.")
+        return True, rows_to_write
+
 
 class Layer_Creation:
+    def new_extract(intensity_threshold, image_folder, calibration_image):
+        """
+        Extracts consecutive groups of layers from images.
+
+        Parameters:
+            intensity_threshold (int): Intensity threshold for layer extraction.
+            image_folder (str): Path to the folder containing images.
+            calibration_image (mat): Calibration Image
+
+        Returns:
+            None
+        """
+        def extend_and_filter_frames(frame_list, buffer=5):
+            # First, filter out isolated single frames
+            filtered_frames = []
+            n = len(frame_list)
+            for i in range(n):
+                if (i > 0 and frame_list[i] == frame_list[i-1] + 1) or (i < n - 1 and frame_list[i] == frame_list[i+1] - 1):
+                    filtered_frames.append(frame_list[i])
+
+            # Apply buffer and merge frames
+            if not filtered_frames:
+                return []
+
+            extended_frames = []
+            start = filtered_frames[0] - buffer
+            end = filtered_frames[0] + buffer
+
+            for frame in filtered_frames[1:]:
+                new_start = frame - buffer
+                new_end = frame + buffer
+
+                if new_start <= end:  # There is overlap or continuity
+                    end = max(end, new_end)  # Extend the range
+                else:
+                    extended_frames.extend(range(start, end + 1))  # Add previous range
+                    start = new_start  # Start a new range
+                    end = new_end
+
+            extended_frames.extend(range(start, end + 1))  # Add the last range
+
+            return extended_frames
+
+        H, X, Y, base_img = Perspective_Transform.NIR.get_transform(calibration_image)
+        
+        if os.path.isdir(image_folder):
+            csv_file_path = os.path.join(image_folder, "intensity_values.csv")
+            
+        elif os.path.isfile(image_folder) and image_folder.lower().endswith('.hdf5'):
+            csv_file_path = os.path.join(os.path.dirname(image_folder), "intensity_values.csv")
+           
+        print('Finding Layers...')
+
+        df = pd.read_csv(csv_file_path)
+        df.at[df.index[-1], 'Max Intensity'] = 255
+
+        df['Frame'] = df['Image Name'].apply(lambda x: int(''.join(filter(str.isdigit, x))))
+        df.sort_values('Frame', inplace=True)
+        above_threshold_df = df[df['Max Intensity'] > intensity_threshold]
+
+        extracted_frames = above_threshold_df['Frame'].tolist()
+        extracted_frames = extend_and_filter_frames(extracted_frames, buffer=10)
+
+        layer = 1
+        consecutive_count = 1
+
+        if os.path.isfile(image_folder) and image_folder.lower().endswith('.hdf5'):
+            layer_folder = os.path.join(os.path.dirname(image_folder),"Layer")
+            video_name = os.path.join(layer_folder,'layer.avi') 
+            fps = 5
+
+            with h5py.File(image_folder, 'r') as hdf_file:
+                for group_name in hdf_file.keys():                
+                    datasets = sorted(hdf_file[group_name].keys(), key=natural_sort_key)           
+                    temp_img = hdf_file[group_name][datasets[0]][:]
+                    temp_img = Perspective_Transform.correct_image(temp_img, H, base_img, flag = 'NIR')
+
+                    height, width = temp_img.shape
+                    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                    video = cv2.VideoWriter(video_name, fourcc, fps, (2*width, height))
+                        
+                    title_text_color = (0, 255, 0)  # Green text color
+                    cum_image = np.uint8(np.zeros_like(temp_img))
+                    print(extracted_frames)
+                    with alive_bar(len(extracted_frames)) as bar:
+                        for i in range(len(extracted_frames)):
+                            if i == 0 or extracted_frames[i] == extracted_frames[i-1] + 1:
+                                consecutive_count += 1
+
+                                image = hdf_file[group_name][df.at[extracted_frames[i],'Image Name']][:]
+                                # try:
+                                #     time_stamp = hdf_file[group_name][df.at[extracted_frames[i]], 'Image Name'].attrs['Time']
+                                # except:
+                                #     time_stamp = "No TimeStamps"
+
+                                print(df.at[extracted_frames[i],'Image Name'])
+                                number = re.search(r'\d+', df.at[extracted_frames[i],'Image Name']).group()
+                                image = cv2.normalize(image, None, 0, df.at[int(number)-1, 'Max Intensity'], cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                                image = Perspective_Transform.correct_image(image, H, base_img, flag = 'NIR')
+                                cum_image = np.maximum(cum_image, image)
+
+                                image = cv2.applyColorMap(image, cv2.COLORMAP_JET)
+                                cum_image_copy = cv2.applyColorMap(cum_image, cv2.COLORMAP_JET)
+
+                                calculated_layer = layer*0.03
+                                text = f"Thickness: {round(calculated_layer,2)} mm"
+                                cv2.putText(cum_image_copy, f"Layer:  {layer}", (width - 330, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, title_text_color, 2, cv2.LINE_AA)
+                                cv2.putText(cum_image_copy, text, (width-330, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, title_text_color, 2, cv2.LINE_AA)
+                                cv2.putText(cum_image_copy, "JRG", (0, height-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,(255, 255, 255), 2)
+                                both = cv2.hconcat([image, cum_image_copy])
+                                video.write(both)  
+                            
+
+
+                            if i > 0 and extracted_frames[i] != extracted_frames[i-1] + 1:
+                                if consecutive_count > 1:  # Ensure at least two frames were consecutive before resetting
+                                    layer += 1
+                                    print(f"Layer: {layer}")
+                                    layer_filepath = os.path.join(layer_folder, f"Layer{layer}.jpg")
+                                    layer_cm_filepath = os.path.join(layer_folder, f"Layer_cm_{layer}.jpg")                                    
+                                    
+                                    cv2.imwrite(layer_filepath, cum_image)
+                                    cv2.imwrite(layer_cm_filepath, cum_image_copy)
+
+                                    cum_image = np.uint8(np.zeros_like(temp_img))
+                                consecutive_count = 1  # Reset consecutive frame count  
+
+                            bar()
+
+                    if consecutive_count > 1:
+                        layer_filepath = os.path.join(layer_folder, f"Layer{layer}.jpg")
+                        layer_cm_filepath = os.path.join(layer_folder, f"Layer_cm_{layer}.jpg")
+                        cv2.imwrite(layer_filepath, cum_image)
+                        cv2.imwrite(layer_cm_filepath, cum_image_copy)
+                    print("Found ", layer-1, "Layers")
+                    video.release()    
+
+        # Another function that I want a csv to be set up like this: Layer # | Beginning Time Stamp | End Time Stamp | Beg. NIR Frame # | End NIR Frame # | FLIR beg Frame # (FLIR ILT) | End FLIR Frame  | 
+        
+        return 
+    
     def extract_consecutive_groups(intensity_threshold, image_folder, calibration_image):
         """
         Extracts consecutive groups of layers from images.
@@ -401,7 +577,7 @@ class Layer_Creation:
         for index, row in above_threshold_df.iterrows():
             frame_value = row['Frame']
             extracted_frames.append(frame_value)
-
+        print(extracted_frames)
         ref.append(0)
         for i in range(1, len(extracted_frames)):
             if extracted_frames[i] != extracted_frames[i - 1] + 1:
@@ -409,6 +585,7 @@ class Layer_Creation:
                 ref.append(i+1)
         ref.pop()
         ref[0] = 1
+
 
         for i in range(0, len(extracted_frames)):
                 corresponding_row = above_threshold_df[above_threshold_df['Frame'] == extracted_frames[i]].iloc[0]
@@ -422,7 +599,8 @@ class Layer_Creation:
 
         print(extracted_frames)
         print(ref)
-        
+        print(reflist)
+
         layer = 0
         if os.path.isdir(image_folder):
             layer_folder = os.path.join(image_folder,"Layer")
@@ -449,7 +627,6 @@ class Layer_Creation:
                         image_path = f"{image_folder}/{image_name[ii]}"
 
                         image = (cv2.imread(image_path, cv2.IMREAD_UNCHANGED))
-                        print(df.at[ii, 'Max Intensity'])
                         image = cv2.normalize(image, None, 0, df.at[ii, 'Max Intensity'], cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                         
                         image = Perspective_Transform.correct_image(image, H, base_img, flag = 'NIR')
@@ -497,7 +674,6 @@ class Layer_Creation:
                         
                     title_text_color = (0, 255, 0)  # Green text color
                     try:
-                        print(reflist)
                         for start, end in reflist:
                             layer += 1
                             temp_img = hdf_file[group_name][image_name[0]][:]
@@ -734,6 +910,8 @@ class Layer_Creation:
         
         # Needs to open a np.zero_like of cropped image intially and then it needs to be take the higher image of each image within the range. After the for loop is complete, the new image needs to be saved as Layer#.jpg
         return above_threshold_df
+    
+
 
 class Model3DCreator:
     def __init__(self):
@@ -1151,7 +1329,7 @@ class Perspective_Transform:
         
         elif flag == 'NIR':
             image = cv2.rotate(image, cv2.ROTATE_180)
-            base_img = np.ones((2000,2000))
+            base_img = np.ones((1390,1390))
         
         elif flag == 'FLIR':
             image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
